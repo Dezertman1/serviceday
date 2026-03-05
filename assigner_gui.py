@@ -30,3 +30,24 @@ class AssignerApp:
         self.run_button = tk.Button(root, text="Start", bg="#4CAF50", fg="white", 
                                 font=("Arial", 12, "bold"), height=2, command=self.process_logic)
         self.run_button.pack(pady=15)
+
+        # Results Frame
+        self.results_frame = tk.LabelFrame(root, text="Assignment Summary")
+        self.results_frame.pack(fill="both", expand=True, padx=20, pady=10)
+
+        # Treeview
+        self.tree = ttk.Treeview(self.results_frame, columns=("Rank", "Count", "Percentage"), show='headings')
+        self.tree.heading("Rank", text="Student Choice")
+        self.tree.heading("Count", text="Number of Students")
+        self.tree.heading("Percentage", text="% of Total")
+        self.tree.column("Rank", width=150)
+        self.tree.column("Count", width=80, anchor="center")
+        self.tree.column("Percentage", width=80, anchor="center")
+        self.tree.pack(fill="both", expand=True)
+
+    def load_activities(self):
+        path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
+        if path: self.activities_path.set(path)
+    def load_students(self):
+        path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
+        if path: self.students_path_path.set(path)
