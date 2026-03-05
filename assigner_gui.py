@@ -20,15 +20,25 @@ class AssignerApp:
         file_frame = tk.LabelFrame(root, text="Select Data Sources", padx=10, pady=10)
         file_frame.pack(fill="x", padx=20, pady=10)
 
-        tk.Button(file_frame, text="Browse Activities CSV", command=self.load_activities).grid(row=0, column=0, pady=5)
-        tk.Label(file_frame, textvariable=self.activities_path, fg="blue", wraplength=400).grid(row=0, column=1, padx=10)
+        tk.Button(
+        file_frame, text="Browse Activities CSV", command=self.load_activities
+        ).grid(row=0, column=0, pady=5)
 
-        tk.Button(file_frame, text="Browse Responses CSV", command=self.load_responses).grid(row=1, column=0, pady=5)
-        tk.Label(file_frame, textvariable=self.responses_path, fg="blue", wraplength=400).grid(row=1, column=1, padx=10)
+        tk.Label(
+        file_frame, textvariable=self.activities_path, fg="blue", wraplength=400
+        ).grid(row=0, column=1, padx=10)
+
+        tk.Button(
+        file_frame, text="Browse Responses CSV", command=self.load_responses
+        ).grid(row=1, column=0, pady=5)
+
+        tk.Label(
+        file_frame, textvariable=self.responses_path, fg="blue", wraplength=400
+        ).grid(row=1, column=1, padx=10)
 
         # Action Button
         self.run_button = tk.Button(root, text="Start", bg="#4CAF50", fg="white", 
-                                font=("Arial", 12, "bold"), height=2, command=self.process_logic)
+        font=("Arial", 12, "bold"), height=2, command=self.process_logic)
         self.run_button.pack(pady=15)
 
         # Results Frame
@@ -36,7 +46,9 @@ class AssignerApp:
         self.results_frame.pack(fill="both", expand=True, padx=20, pady=10)
 
         # Treeview
-        self.tree = ttk.Treeview(self.results_frame, columns=("Rank", "Count", "Percentage"), show='headings')
+        self.tree = ttk.Treeview(self.results_frame, columns=(
+            "Rank", "Count", "Percentage"
+        ), show='headings')
         self.tree.heading("Rank", text="Student Choice")
         self.tree.heading("Count", text="Number of Students")
         self.tree.heading("Percentage", text="% of Total")
@@ -60,7 +72,8 @@ class AssignerApp:
         # Logic
         try:
             activities = pd.read_csv(self.activities_path.get())
-            students = pd.read_csv(self.responses_path.get()).dropna(subset=['Name', 'Choice 1'])
+            students = pd.read_csv(
+            self.responses_path.get()).dropna(subset=['Name', 'Choice 1'])
 
             slot_to_activity = []
             for _, row in activities.iterrows():
@@ -109,4 +122,33 @@ class AssignerApp:
                         "Unranked Activity" if cost_val == UNRANKED_COST else \
                         f"Choice {int(np.sqrt(cost_val))}"
                 
-                final_results.append({'Outcome': label, 'Name': students.iloc[i]['Name'], 'Activity': slot_to_activity[j]})
+                final_results.append({
+                'Outcome': label, 
+                'Name': students.iloc[i]['Name'], 
+                'Activity': slot_to_activity[j]})
+
+            # Export + UI Update
+            df = pd.DataFrame(final_results)
+            df.to_csv('final_assignments.csv', index=False)
+
+            # Clear existing table data
+            for item in self.tree.get_children():
+                self.tree.delete(item)
+
+            # Calculate and Insert Stats
+            stats = df['Outcome'].value_counts()
+            total = len(df)
+            for label, count in stats.items():
+                percentage = (count / total) * 100
+                self.tree.insert("", "end", values=(label, count, f"{percentage:.1f}%"))
+
+            messagebox.showinfo(
+                "Success", "Complete!\nResults saved to final_assignments.csv")
+
+        except Exception as e:
+            messagebox.showerror("Runtime Error", f"Something went wrong:\n{str(e)}")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = AssignerApp(root)
+    root.mainloop()
