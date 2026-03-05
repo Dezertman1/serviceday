@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from scipy.optimize import linear_sum_assignment
@@ -8,11 +7,11 @@ from scipy.optimize import linear_sum_assignment
 class AssignerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title = "Service Day Assignment"
+        self.root.title("Service Day Assignment")
         self.root.geometry("600x650")
 
         self.activities_path = tk.StringVar()
-        self.students_path = tk.StringVar()
+        self.student_path = tk.StringVar()
 
         tk.Label(root, text="Service Day Assignment", font=("Arial", 16, "bold"))
 
@@ -33,7 +32,7 @@ class AssignerApp:
         ).grid(row=1, column=0, pady=5)
 
         tk.Label(
-        file_frame, textvariable=self.responses_path, fg="blue", wraplength=400
+        file_frame, textvariable=self.student_path, fg="blue", wraplength=400
         ).grid(row=1, column=1, padx=10)
 
         # Action Button
@@ -63,17 +62,17 @@ class AssignerApp:
 
     def load_students(self):
         path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
-        if path: self.students_path_path.set(path)
+        if path: self.student_path.set(path)
 
     def process_logic(self):
-        if not self.activities_path.get() or not self.students_path.get():
+        if not self.activities_path.get() or not self.student_path.get():
             messagebox.showerror("Error", "Please select both .CSV files.")
 
         # Logic
         try:
             activities = pd.read_csv(self.activities_path.get())
             students = pd.read_csv(
-            self.responses_path.get()).dropna(subset=['Name', 'Choice 1'])
+            self.student_path.get()).dropna(subset=['Name', 'Choice 1'])
 
             slot_to_activity = []
             for _, row in activities.iterrows():
