@@ -28,7 +28,7 @@ class AssignerApp:
         ).grid(row=0, column=1, padx=10)
 
         tk.Button(
-        file_frame, text="Browse Responses CSV", command=self.load_responses
+        file_frame, text="Browse Responses CSV", command=self.load_students
         ).grid(row=1, column=0, pady=5)
 
         tk.Label(
@@ -67,6 +67,7 @@ class AssignerApp:
     def process_logic(self):
         if not self.activities_path.get() or not self.student_path.get():
             messagebox.showerror("Error", "Please select both .CSV files.")
+            return
 
         # Logic
         try:
@@ -122,9 +123,10 @@ class AssignerApp:
                         f"Choice {int(np.sqrt(cost_val))}"
                 
                 final_results.append({
-                'Outcome': label, 
                 'Name': students.iloc[i]['Name'], 
-                'Activity': slot_to_activity[j]})
+                'Activity': slot_to_activity[j],
+                'Outcome': label
+                })
 
             # Export + UI Update
             df = pd.DataFrame(final_results)
