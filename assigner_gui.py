@@ -8,7 +8,7 @@ class AssignerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Service Day Assignment")
-        self.root.geometry("600x650")
+        self.root.geometry("850x650")
 
         self.activities_path = tk.StringVar()
         self.student_path = tk.StringVar()
