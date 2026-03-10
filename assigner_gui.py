@@ -221,37 +221,52 @@ class AssignerApp:
     #  Core logic 
     def process_logic(self):
         if not self.activities_path.get() or not self.student_path.get():
-            messagebox.showerror("Error", "Please select both CSV files.")
+            messagebox.showerror("Error", "Please select both .CSV files.")
             return
+
+        # Ask the user where to save the file BEFORE running the logic
+        save_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv")],
+            initialfile="final_assignments.csv",
+            title="Save Assignments As"
+        )
+        
+        # If user cancels the save dialog
+        if not save_path:
+            return
+
         try:
-            activities = load_activities(self.activities_path.get())
-            students   = parse_responses(self.student_path.get())
+            # Data Loading & Parsing
+            activities_df = load_activities(self.activities_path.get())
+            students_df = parse_responses(self.student_path.get())
 
-            # Confirmed attendees first, uncertain last
-            confirmed = students[students["_will_attend"]].reset_index(drop=True)
-            uncertain = students[~students["_will_attend"]].reset_index(drop=True)
-            ordered   = pd.concat([confirmed, uncertain], ignore_index=True)
-            num_confirmed = len(confirmed)
-
-            # Build slot list
+            # Filter for only those attending
+            students_df = students_df[students_df["_will_attend"]].reset_index(drop=True)
+            
+            # Create Slots
             slot_to_activity = []
-            for _, row in activities.iterrows():
-                for _ in range(row["Max Capacity"]):
-                    slot_to_activity.append(row["Activity Name"])
+            for _, row in activities_df.iterrows():
+                for _ in range(int(row['Max Capacity'])):
+                    slot_to_activity.append(row['Activity Name'])
 
-            num_students       = len(ordered)
+            num_students = len(students_df)
             num_physical_slots = len(slot_to_activity)
-            num_waitlist       = 0
+
+            # Handle Overflow (Waitlist)
+            num_waitlist = 0
             if num_students > num_physical_slots:
                 num_waitlist = num_students - num_physical_slots
-                slot_to_activity += ["WAITLIST / UNASSIGNED"] * num_waitlist
+                for _ in range(num_waitlist):
+                    slot_to_activity.append("WAITLIST / UNASSIGNED")
 
-            UNRANKED_COST   = 1_000_000
-            WAITLIST_COST   = 5_000_000
-            UNCERTAIN_EXTRA = 10_000
+            # Setup Cost Matrix
+            UNRANKED_COST = 1_000_000
+            WAITLIST_COST = 5_000_000
             num_total_slots = len(slot_to_activity)
-            cost_matrix     = np.full((num_students, num_total_slots), UNRANKED_COST)
-            if num_waitlist > 0:
+            cost_matrix = np.full((num_students, num_total_slots), UNRANKED_COST)
+            
+            if num_waitlist > 0: 
                 cost_matrix[:, -num_waitlist:] = WAITLIST_COST
 
             activity_to_slots = {}
@@ -259,58 +274,52 @@ class AssignerApp:
                 if name != "WAITLIST / UNASSIGNED":
                     activity_to_slots.setdefault(name, []).append(i)
 
-            for i, student in ordered.iterrows():
-                is_uncertain = not student["_will_attend"]
-                for rank, activity in student["_prefs"].items():
-                    cost = rank ** 2 + (UNCERTAIN_EXTRA if is_uncertain else 0)
-                    if activity in activity_to_slots:
-                        for slot_idx in activity_to_slots[activity]:
+            # Fill costs based on preferences
+            for i, student in students_df.iterrows():
+                prefs = student["_prefs"] # Dictionary of {rank: "Activity Name"}
+                for rank, act_name in prefs.items():
+                    if act_name in activity_to_slots:
+                        cost = int(rank) ** 2
+                        for slot_idx in activity_to_slots[act_name]:
                             cost_matrix[i, slot_idx] = cost
 
             row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
             final_results = []
             for i, j in zip(row_ind, col_ind):
-                cost_val  = cost_matrix[i, j]
-                is_unc    = not ordered.iloc[i]["_will_attend"]
-                adj_cost  = cost_val - (UNCERTAIN_EXTRA if is_unc else 0)
-                label = ("No Choice Possible" if adj_cost >= WAITLIST_COST else
-                         "Unranked Activity"  if adj_cost >= UNRANKED_COST  else
-                         f"Choice {int(round(np.sqrt(adj_cost)))}")
+                cost_val = cost_matrix[i, j]
+                
+                # Determine the outcome label
+                if cost_val == WAITLIST_COST:
+                    label = "No Choice Possible"
+                elif cost_val == UNRANKED_COST:
+                    label = "Unranked Activity"
+                else:
+                    label = f"Choice {int(np.sqrt(cost_val))}"
+                
                 final_results.append({
-                    "Name":     ordered.iloc[i]["Name"],
-                    "Activity": slot_to_activity[j],
-                    "Outcome":  label,
+                    'Name': students_df.iloc[i]['Name'], 
+                    'Assigned Activity': slot_to_activity[j],
+                    'Outcome': label
                 })
 
-            df = pd.DataFrame(final_results)
-            out_path = os.path.join(
-                os.path.dirname(self.student_path.get()), "final_assignments.csv")
-            df.to_csv(out_path, index=False)
+            # Save to the user-selected path
+            output_df = pd.DataFrame(final_results)
+            output_df.to_csv(save_path, index=False)
 
             for item in self.tree.get_children():
                 self.tree.delete(item)
-            self.placeholder.place_forget()
 
-            order = ["Choice 1","Choice 2","Choice 3","Choice 4","Choice 5",
-                     "Unranked Activity","No Choice Possible"]
-            stats = df["Outcome"].value_counts()
-            stats = stats.reindex(
-                [o for o in order if o in stats.index] +
-                [o for o in stats.index if o not in order])
-            total = len(df)
-            for outcome, count in stats.items():
-                pct = (count / total) * 100
-                tag = outcome if outcome in TAG_COLS else ""
-                self.tree.insert("", "end",
-                                 values=(outcome, count, f"{pct:.1f}%"),
-                                 tags=(tag,))
+            stats = output_df['Outcome'].value_counts()
+            total = len(output_df)
+            for label, count in stats.items():
+                percentage = (count / total) * 100
+                self.tree.insert("", "end", values=(label, count, f"{percentage:.1f}%"))
 
-            messagebox.showinfo("Done",
-                f"Assignment complete!\nSaved to:\n{out_path}")
+            messagebox.showinfo("Success", f"Assignments saved to:\n{save_path}")
 
         except Exception as e:
-            messagebox.showerror("Error", f"Something went wrong:\n{e}")
+            messagebox.showerror("Runtime Error", f"Something went wrong:\n{str(e)}")
 
 
 if __name__ == "__main__":
