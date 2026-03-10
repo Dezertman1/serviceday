@@ -4,8 +4,9 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from scipy.optimize import linear_sum_assignment
 import os
+import re
 
-# Palette
+#  Palette 
 BG        = "#F7F8FA"
 CARD      = "#FFFFFF"
 BORDER    = "#E2E5EA"
@@ -18,15 +19,84 @@ TAG_COLS  = {
     "Choice 1":          ("#DCFCE7", "#15803D"),
     "Choice 2":          ("#DBEAFE", "#1D4ED8"),
     "Choice 3":          ("#EDE9FE", "#6D28D9"),
+    "Choice 4":          ("#F3E8FF", "#7E22CE"),
+    "Choice 5":          ("#FFF7ED", "#C2410C"),
     "Unranked Activity": ("#FEF9C3", "#854D0E"),
     "No Choice Possible":("#FEE2E2", "#B91C1C"),
 }
 
 FONT_TITLE  = ("Helvetica Neue", 18, "bold")
 FONT_LABEL  = ("Helvetica Neue", 10)
-FONT_SMALL  = ("Helvetica Neue", 9)
 FONT_BUTTON = ("Helvetica Neue", 10, "bold")
 FONT_MONO   = ("Courier", 9)
+
+#  When I add the attendance question to my form, set these two values
+ATTENDANCE_COLUMN        = None   # e.g. "Will you attend Service Day?"
+ATTENDANCE_CONFIRM_VALUE = None   # e.g. "Yes"
+
+RANK_MAP = {
+    "1st request": 1, "2nd request": 2, "3rd request": 3,
+    "4th request": 4, "5th request": 5,
+}
+
+
+def load_activities(path):
+    df = pd.read_csv(path)
+    cols = df.columns.tolist()
+
+    # Detect and rename to a standard schema
+    name_col = next((c for c in cols if c.strip().lower() in
+                     ("activity name", "project name")), None)
+    cap_col  = next((c for c in cols if c.strip().lower() in
+                     ("max capacity", "maximu students", "maximum students",
+                      "max students")), None)
+
+    if not name_col or not cap_col:
+        raise ValueError(
+            f"Could not find activity name / capacity columns.\n"
+            f"Found: {cols}\n"
+            f"Expected one of: 'Activity Name', 'Project Name'\n"
+            f"and one of: 'Max Capacity', 'Maximu Students', 'Maximum Students'"
+        )
+
+    df = df[[name_col, cap_col]].copy()
+    df.columns = ["Activity Name", "Max Capacity"]
+    df["Activity Name"] = df["Activity Name"].str.strip()
+    df["Max Capacity"]  = pd.to_numeric(df["Max Capacity"], errors="coerce").fillna(0).astype(int)
+    return df
+
+
+def parse_responses(path):
+    df = pd.read_csv(path)
+
+    first = df["First Name"].str.strip().fillna("")
+    last  = df["Last Name"].str.strip().fillna("")
+    df["Name"] = last + ", " + first
+
+    proj_cols = [c for c in df.columns if c.startswith("Project Requests [")]
+
+    def extract_activity(col):
+        m = re.search(r"\[(.+?)\]", col)
+        return m.group(1).strip() if m else col
+
+    prefs = []
+    for _, row in df.iterrows():
+        choices = {}
+        for col in proj_cols:
+            val = str(row[col]).strip().lower() if pd.notna(row[col]) else ""
+            rank = RANK_MAP.get(val)
+            if rank:
+                choices[rank] = extract_activity(col)
+        prefs.append(choices)
+    df["_prefs"] = prefs
+
+    if ATTENDANCE_COLUMN and ATTENDANCE_COLUMN in df.columns:
+        df["_will_attend"] = (df[ATTENDANCE_COLUMN].astype(str).str.strip()
+                              == str(ATTENDANCE_CONFIRM_VALUE))
+    else:
+        df["_will_attend"] = True
+
+    return df[["Name", "_prefs", "_will_attend"]].reset_index(drop=True)
 
 
 class AssignerApp:
@@ -45,7 +115,7 @@ class AssignerApp:
         self._build_run_button()
         self._build_results_card()
 
-    # Header
+    #  Header 
     def _build_header(self):
         hdr = tk.Frame(self.root, bg=BG)
         hdr.pack(fill="x", padx=28, pady=(22, 4))
@@ -53,19 +123,18 @@ class AssignerApp:
                  bg=BG, fg=TEXT).pack(side="left")
         tk.Label(hdr, text="  Assignment Tool", font=("Helvetica Neue", 18),
                  bg=BG, fg=SUBTEXT).pack(side="left")
-        rule = tk.Frame(self.root, bg=BORDER, height=1)
-        rule.pack(fill="x", padx=28, pady=(6, 0))
+        tk.Frame(self.root, bg=BORDER, height=1).pack(fill="x", padx=28, pady=(6, 0))
 
-    # File card
+    #  File card 
     def _build_file_card(self):
         card = tk.Frame(self.root, bg=CARD, bd=0,
                         highlightthickness=1, highlightbackground=BORDER)
         card.pack(fill="x", padx=28, pady=14)
         tk.Label(card, text="DATA SOURCES", font=("Helvetica Neue", 8, "bold"),
                  bg=CARD, fg=SUBTEXT).pack(anchor="w", padx=16, pady=(12, 6))
-        self._file_row(card, "Activities CSV", self.activities_path, self.load_activities)
+        self._file_row(card, "Activities CSV", self.activities_path, self._load_activities)
         tk.Frame(card, bg=BORDER, height=1).pack(fill="x", padx=16)
-        self._file_row(card, "Responses CSV",  self.student_path,    self.load_students)
+        self._file_row(card, "Responses CSV",  self.student_path,    self._load_students)
 
     def _file_row(self, parent, label, var, cmd):
         row = tk.Frame(parent, bg=CARD)
@@ -82,7 +151,7 @@ class AssignerApp:
                   activebackground=PRIMARY_H, activeforeground="white",
                   cursor="hand2", padx=14, pady=4, command=cmd).pack(side="right")
 
-    # Run button
+    #  Run button 
     def _build_run_button(self):
         frame = tk.Frame(self.root, bg=BG)
         frame.pack(fill="x", padx=28, pady=4)
@@ -94,7 +163,7 @@ class AssignerApp:
             padx=20, pady=10, command=self.process_logic)
         self.run_button.pack(side="right")
 
-    # Results card 
+    #  Results card 
     def _build_results_card(self):
         card = tk.Frame(self.root, bg=CARD, bd=0,
                         highlightthickness=1, highlightbackground=BORDER)
@@ -140,31 +209,37 @@ class AssignerApp:
             font=FONT_LABEL, bg=CARD, fg=SUBTEXT)
         self.placeholder.place(relx=0.5, rely=0.5, anchor="center")
 
-    # File loaders 
-    def load_activities(self):
+    #  File loaders 
+    def _load_activities(self):
         path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
         if path: self.activities_path.set(path)
 
-    def load_students(self):
+    def _load_students(self):
         path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
         if path: self.student_path.set(path)
 
-    # Core logic 
+    #  Core logic 
     def process_logic(self):
         if not self.activities_path.get() or not self.student_path.get():
             messagebox.showerror("Error", "Please select both CSV files.")
             return
         try:
-            activities = pd.read_csv(self.activities_path.get())
-            students   = pd.read_csv(self.student_path.get()).dropna(
-                             subset=["Name", "Choice 1"])
+            activities = load_activities(self.activities_path.get())
+            students   = parse_responses(self.student_path.get())
 
+            # Confirmed attendees first, uncertain last
+            confirmed = students[students["_will_attend"]].reset_index(drop=True)
+            uncertain = students[~students["_will_attend"]].reset_index(drop=True)
+            ordered   = pd.concat([confirmed, uncertain], ignore_index=True)
+            num_confirmed = len(confirmed)
+
+            # Build slot list
             slot_to_activity = []
             for _, row in activities.iterrows():
-                for _ in range(int(row["Max Capacity"])):
+                for _ in range(row["Max Capacity"]):
                     slot_to_activity.append(row["Activity Name"])
 
-            num_students       = len(students)
+            num_students       = len(ordered)
             num_physical_slots = len(slot_to_activity)
             num_waitlist       = 0
             if num_students > num_physical_slots:
@@ -173,6 +248,7 @@ class AssignerApp:
 
             UNRANKED_COST   = 1_000_000
             WAITLIST_COST   = 5_000_000
+            UNCERTAIN_EXTRA = 10_000
             num_total_slots = len(slot_to_activity)
             cost_matrix     = np.full((num_students, num_total_slots), UNRANKED_COST)
             if num_waitlist > 0:
@@ -183,28 +259,26 @@ class AssignerApp:
                 if name != "WAITLIST / UNASSIGNED":
                     activity_to_slots.setdefault(name, []).append(i)
 
-            choice_cols = [c for c in students.columns if "Choice" in c]
-            for i, student in students.reset_index().iterrows():
-                for col in choice_cols:
-                    if pd.isna(student[col]): continue
-                    digits = "".join(filter(str.isdigit, col))
-                    if not digits: continue
-                    cost = int(digits) ** 2
-                    pref = str(student[col]).strip()
-                    if pref in activity_to_slots:
-                        for slot_idx in activity_to_slots[pref]:
+            for i, student in ordered.iterrows():
+                is_uncertain = not student["_will_attend"]
+                for rank, activity in student["_prefs"].items():
+                    cost = rank ** 2 + (UNCERTAIN_EXTRA if is_uncertain else 0)
+                    if activity in activity_to_slots:
+                        for slot_idx in activity_to_slots[activity]:
                             cost_matrix[i, slot_idx] = cost
 
             row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
             final_results = []
             for i, j in zip(row_ind, col_ind):
-                cost_val = cost_matrix[i, j]
-                label = ("No Choice Possible" if cost_val == WAITLIST_COST else
-                         "Unranked Activity"  if cost_val == UNRANKED_COST  else
-                         f"Choice {int(np.sqrt(cost_val))}")
+                cost_val  = cost_matrix[i, j]
+                is_unc    = not ordered.iloc[i]["_will_attend"]
+                adj_cost  = cost_val - (UNCERTAIN_EXTRA if is_unc else 0)
+                label = ("No Choice Possible" if adj_cost >= WAITLIST_COST else
+                         "Unranked Activity"  if adj_cost >= UNRANKED_COST  else
+                         f"Choice {int(round(np.sqrt(adj_cost)))}")
                 final_results.append({
-                    "Name":     students.iloc[i]["Name"],
+                    "Name":     ordered.iloc[i]["Name"],
                     "Activity": slot_to_activity[j],
                     "Outcome":  label,
                 })
@@ -218,7 +292,8 @@ class AssignerApp:
                 self.tree.delete(item)
             self.placeholder.place_forget()
 
-            order = ["Choice 1","Choice 2","Choice 3","Unranked Activity","No Choice Possible"]
+            order = ["Choice 1","Choice 2","Choice 3","Choice 4","Choice 5",
+                     "Unranked Activity","No Choice Possible"]
             stats = df["Outcome"].value_counts()
             stats = stats.reindex(
                 [o for o in order if o in stats.index] +
