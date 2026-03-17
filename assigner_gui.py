@@ -3,7 +3,6 @@ import numpy as np
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from scipy.optimize import linear_sum_assignment
-import os
 import re
 
 #  Palette 
@@ -31,12 +30,12 @@ FONT_BUTTON = ("Helvetica Neue", 10, "bold")
 FONT_MONO   = ("Courier", 9)
 
 #  When I add the attendance question to my form, set these two values
-ATTENDANCE_COLUMN        = None   # e.g. "Will you attend Service Day?"
-ATTENDANCE_CONFIRM_VALUE = None   # e.g. "Yes"
+ATTENDANCE_COLUMN        = "Which of the following best answers your attendence plan on Service Day.  (Friday, May 8)"   # e.g. "Will you attend Service Day?"
+ATTENDANCE_CONFIRM_VALUE = "Can't wait!  Please give me one of my top choices if possible!"   # e.g. "Yes"
 
 RANK_MAP = {
-    "1st request": 1, "2nd request": 2, "3rd request": 3,
-    "4th request": 4, "5th request": 5,
+    "1st Request": 1, "2nd Request": 2, "3rd Request": 3,
+    "4th Request": 4, "5th Request": 5,
 }
 
 
@@ -68,12 +67,18 @@ def load_activities(path):
 
 def parse_responses(path):
     df = pd.read_csv(path)
+    cols = df.columns.tolist()
 
-    first = df["First Name"].str.strip().fillna("")
-    last  = df["Last Name"].str.strip().fillna("")
-    df["Name"] = last + ", " + first
+    fname_col = next((c for c in cols if "first name" in c.lower()), None)
+    lname_col = next((c for c in cols if "last name" in c.lower()), None)
 
-    proj_cols = [c for c in df.columns if c.startswith("Project Requests [")]
+    if fname_col and lname_col:
+        df["Name"] = df[lname_col].str.strip().fillna("") + ", " + df[fname_col].str.strip().fillna("")
+    else:
+        name_col = next((c for c in cols if "name" in c.lower()), None)
+        df["Name"] = df[name_col] if name_col else "Unknown Student"
+
+    proj_cols = [c for c in df.columns if "Project Requests." in c and "[" in c]
 
     def extract_activity(col):
         m = re.search(r"\[(.+?)\]", col)
@@ -83,7 +88,7 @@ def parse_responses(path):
     for _, row in df.iterrows():
         choices = {}
         for col in proj_cols:
-            val = str(row[col]).strip().lower() if pd.notna(row[col]) else ""
+            val = str(row[col]).strip() if pd.notna(row[col]) else ""
             rank = RANK_MAP.get(val)
             if rank:
                 choices[rank] = extract_activity(col)
@@ -150,7 +155,6 @@ class AssignerApp:
                   bg=PRIMARY, fg="white", relief="flat",
                   activebackground=PRIMARY_H, activeforeground="white",
                   cursor="hand2", padx=14, pady=4, command=cmd).pack(side="right")
-
     #  Run button 
     def _build_run_button(self):
         frame = tk.Frame(self.root, bg=BG)
@@ -275,6 +279,8 @@ class AssignerApp:
                     activity_to_slots.setdefault(name, []).append(i)
 
             # Fill costs based on preferences
+
+            WILDCARD_ACTIVITY = "Happy to help wherever needed!"
             for i, student in students_df.iterrows():
                 prefs = student["_prefs"] # Dictionary of {rank: "Activity Name"}
                 for rank, act_name in prefs.items():
@@ -282,9 +288,11 @@ class AssignerApp:
                         cost = int(rank) ** 2
                         for slot_idx in activity_to_slots[act_name]:
                             cost_matrix[i, slot_idx] = cost
+                if prefs.get(1) == WILDCARD_ACTIVITY and WILDCARD_ACTIVITY in activity_to_slots:
+                    for slot_idx in activity_to_slots[WILDCARD_ACTIVITY]:
+                        cost_matrix[i, slot_idx] = 0
 
             row_ind, col_ind = linear_sum_assignment(cost_matrix)
-
             final_results = []
             for i, j in zip(row_ind, col_ind):
                 cost_val = cost_matrix[i, j]
