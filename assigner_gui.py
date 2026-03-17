@@ -278,38 +278,105 @@ class AssignerApp:
                 if name != "WAITLIST / UNASSIGNED":
                     activity_to_slots.setdefault(name, []).append(i)
 
-            # Fill costs based on preferences
-
             WILDCARD_ACTIVITY = "Happy to help wherever needed!"
-            for i, student in students_df.iterrows():
-                prefs = student["_prefs"] # Dictionary of {rank: "Activity Name"}
-                for rank, act_name in prefs.items():
-                    if act_name in activity_to_slots:
-                        cost = (int(rank) - 1) ** 10
-                        for slot_idx in activity_to_slots[act_name]:
-                            cost_matrix[i, slot_idx] = cost
-                if prefs.get(1) == WILDCARD_ACTIVITY and WILDCARD_ACTIVITY in activity_to_slots:
-                    for slot_idx in activity_to_slots[WILDCARD_ACTIVITY]:
-                        cost_matrix[i, slot_idx] = 0
+            UNRANKED_COST = 1_000_000
+            WAITLIST_COST = 5_000_000
 
-            row_ind, col_ind = linear_sum_assignment(cost_matrix)
+            # Pass 1 - Fill choice 1 at the start
+            locked = {}  # student_index -> slot_index
+            slot_used = set()
+
+            for i, student in students_df.iterrows():
+                first_choice = student["_prefs"].get(1)
+                if first_choice and first_choice in activity_to_slots:
+                    # Find a free slot for this activity
+                    for slot_idx in activity_to_slots[first_choice]:
+                        if slot_idx not in slot_used:
+                            locked[i] = slot_idx
+                            slot_used.add(slot_idx)
+                            break
+                        
+            # Pass 2 - assign remaining students
+            remaining_students = [i for i in range(num_students) if i not in locked]
+            remaining_slots = [j for j in range(num_total_slots) if j not in slot_used]
+
             final_results = []
-            for i, j in zip(row_ind, col_ind):
-                cost_val = cost_matrix[i, j]
-                
-                # Determine the outcome label
-                if cost_val == WAITLIST_COST:
-                    label = "No Choice Possible"
-                elif cost_val == UNRANKED_COST:
-                    label = "Unranked Activity"
-                else:
-                    label = f"Choice {int(np.sqrt(cost_val))}"
-                
+
+            # Add locked students to results first
+            import math
+            for i, j in locked.items():
                 final_results.append({
-                    'Name': students_df.iloc[i]['Name'], 
+                    'Name': students_df.iloc[i]['Name'],
                     'Assigned Activity': slot_to_activity[j],
-                    'Outcome': label
+                    'Outcome': 'Choice 1'
                 })
+
+            if remaining_students and remaining_slots:
+                n_rem_s = len(remaining_students)
+                n_rem_sl = len(remaining_slots)
+
+                # Pad slots if too many students
+                extra_waitlist = 0
+                if n_rem_s > n_rem_sl:
+                    extra_waitlist = n_rem_s - n_rem_sl
+                    remaining_slots += [-1] * extra_waitlist  # waitlist slots
+                    n_rem_sl = len(remaining_slots)
+
+                cost_matrix2 = np.full((n_rem_s, n_rem_sl), UNRANKED_COST)
+
+                for new_i, orig_i in enumerate(remaining_students):
+                    prefs = students_df.iloc[orig_i]["_prefs"]
+                    for rank, act_name in prefs.items():
+                        if rank == 1:
+                            continue  # Skip if choice 1 fails from capacity
+                        if act_name == WILDCARD_ACTIVITY:
+                            # Wildcard at rank 2+: use normal cost but find its remaining slots
+                            cost = 10 ** (int(rank) - 1)
+                        else:
+                            cost = 10 ** (int(rank) - 1)
+                        if act_name in activity_to_slots:
+                            for slot_idx in activity_to_slots[act_name]:
+                                if slot_idx in remaining_slots:
+                                    new_j = remaining_slots.index(slot_idx)
+                                    cost_matrix2[new_i, new_j] = cost
+
+                    # Wildcard rank 1 that didn't get locked forces to 0 on any wildcard slot
+                    if prefs.get(1) == WILDCARD_ACTIVITY and WILDCARD_ACTIVITY in activity_to_slots:
+                        for slot_idx in activity_to_slots[WILDCARD_ACTIVITY]:
+                            if slot_idx in remaining_slots:
+                                new_j = remaining_slots.index(slot_idx)
+                                cost_matrix2[new_i, new_j] = 0
+
+                    # Waitlist placeholder slots
+                    for wl_offset in range(extra_waitlist):
+                        cost_matrix2[new_i, n_rem_sl - extra_waitlist + wl_offset] = WAITLIST_COST
+
+                row_ind2, col_ind2 = linear_sum_assignment(cost_matrix2)
+
+                for new_i, new_j in zip(row_ind2, col_ind2):
+                    orig_i = remaining_students[new_i]
+                    slot_idx = remaining_slots[new_j]
+                    cost_val = cost_matrix2[new_i, new_j]
+
+                    if cost_val == WAITLIST_COST or slot_idx == -1:
+                        label = "No Choice Possible"
+                        activity = "WAITLIST / UNASSIGNED"
+                    elif cost_val == UNRANKED_COST:
+                        label = "Unranked Activity"
+                        activity = slot_to_activity[slot_idx]
+                    elif cost_val == 0:
+                        label = "Choice 1"
+                        activity = slot_to_activity[slot_idx]
+                    else:
+                        rank = int(math.log10(cost_val)) + 1
+                        label = f"Choice {rank}"
+                        activity = slot_to_activity[slot_idx]
+
+                    final_results.append({
+                        'Name': students_df.iloc[orig_i]['Name'],
+                        'Assigned Activity': activity,
+                        'Outcome': label
+                    })
 
             # Save to the user-selected path
             output_df = pd.DataFrame(final_results)
