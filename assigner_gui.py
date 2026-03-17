@@ -288,6 +288,8 @@ class AssignerApp:
 
             for i, student in students_df.iterrows():
                 first_choice = student["_prefs"].get(1)
+                if first_choice == WILDCARD_ACTIVITY:
+                    continue
                 if first_choice and first_choice in activity_to_slots:
                     # Find a free slot for this activity
                     for slot_idx in activity_to_slots[first_choice]:
