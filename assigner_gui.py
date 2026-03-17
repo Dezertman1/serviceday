@@ -285,7 +285,7 @@ class AssignerApp:
                 prefs = student["_prefs"] # Dictionary of {rank: "Activity Name"}
                 for rank, act_name in prefs.items():
                     if act_name in activity_to_slots:
-                        cost = int(rank) ** 2
+                        cost = (int(rank) - 1) ** 10
                         for slot_idx in activity_to_slots[act_name]:
                             cost_matrix[i, slot_idx] = cost
                 if prefs.get(1) == WILDCARD_ACTIVITY and WILDCARD_ACTIVITY in activity_to_slots:
