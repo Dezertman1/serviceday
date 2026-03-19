@@ -31,7 +31,8 @@ FONT_MONO   = ("Courier", 9)
 
 #  When I add the attendance question to my form, set these two values
 ATTENDANCE_COLUMN        = "Which of the following best answers your attendence plan on Service Day.  (Friday, May 8)"   # e.g. "Will you attend Service Day?"
-ATTENDANCE_CONFIRM_VALUE = "Can't wait!  Please give me one of my top choices if possible!"   # e.g. "Yes"
+ATTENDANCE_CONFIRM_VALUE   = "Can't wait!  Please give me one of my top choices if possible!"
+ATTENDANCE_UNCERTAIN_VALUE = "Might not make it.  Put me in a group just in case, but I understand it won't be my top choice"
 
 RANK_MAP = {
     "1st Request": 1, "2nd Request": 2, "3rd Request": 3,
@@ -96,12 +97,14 @@ def parse_responses(path):
     df["_prefs"] = prefs
 
     if ATTENDANCE_COLUMN and ATTENDANCE_COLUMN in df.columns:
-        df["_will_attend"] = (df[ATTENDANCE_COLUMN].astype(str).str.strip()
-                              == str(ATTENDANCE_CONFIRM_VALUE))
+        vals = df[ATTENDANCE_COLUMN].astype(str).str.strip()
+        df["_will_attend"] = vals == str(ATTENDANCE_CONFIRM_VALUE)
+        df["_may_attend"]  = vals == str(ATTENDANCE_UNCERTAIN_VALUE)
     else:
         df["_will_attend"] = True
+        df["_may_attend"]  = False
 
-    return df[["Name", "_prefs", "_will_attend"]].reset_index(drop=True)
+    return df[["Name", "_prefs", "_will_attend", "_may_attend"]].reset_index(drop=True)
 
 
 class AssignerApp:
@@ -243,10 +246,24 @@ class AssignerApp:
         try:
             # Data Loading & Parsing
             activities_df = load_activities(self.activities_path.get())
-            students_df = parse_responses(self.student_path.get())
+            all_students_df = parse_responses(self.student_path.get())
 
-            # Filter for only those attending
-            students_df = students_df[students_df["_will_attend"]].reset_index(drop=True)
+            # Build flag for ALL students before filtering
+            WILDCARD_ACTIVITY = "Happy to help wherever needed!"
+
+            def compute_flag(row):
+                if row["_may_attend"]:
+                    return "May Not Attend"
+                if row["_prefs"].get(1) == WILDCARD_ACTIVITY:
+                    return "Will help anywhere"
+                return ""
+
+            all_students_df["_flag"] = all_students_df.apply(compute_flag, axis=1)
+
+            # Include confirmed AND uncertain attendees in assignment
+            students_df = all_students_df[
+                all_students_df["_will_attend"] | all_students_df["_may_attend"]
+            ].reset_index(drop=True)
             
             # Create Slots
             slot_to_activity = []
@@ -265,8 +282,9 @@ class AssignerApp:
                     slot_to_activity.append("WAITLIST / UNASSIGNED")
 
             # Setup Cost Matrix
-            UNRANKED_COST = 1_000_000
-            WAITLIST_COST = 5_000_000
+            UNRANKED_COST     = 1_000_000
+            MAY_ATTEND_PENALTY =   100_000   # added to each choice cost for uncertain attendees
+            WAITLIST_COST     = 5_000_000
             num_total_slots = len(slot_to_activity)
             cost_matrix = np.full((num_students, num_total_slots), UNRANKED_COST)
             
@@ -278,15 +296,14 @@ class AssignerApp:
                 if name != "WAITLIST / UNASSIGNED":
                     activity_to_slots.setdefault(name, []).append(i)
 
-            WILDCARD_ACTIVITY = "Happy to help wherever needed!"
-            UNRANKED_COST = 1_000_000
-            WAITLIST_COST = 5_000_000
-
             # Pass 1 - Fill choice 1 at the start
             locked = {}  # student_index -> slot_index
             slot_used = set()
 
             for i, student in students_df.iterrows():
+                # "May Not Attend" students are deprioritised – skip Pass 1
+                if student["_flag"] == "May Not Attend":
+                    continue
                 first_choice = student["_prefs"].get(1)
                 if first_choice == WILDCARD_ACTIVITY:
                     continue
@@ -310,7 +327,8 @@ class AssignerApp:
                 final_results.append({
                     'Name': students_df.iloc[i]['Name'],
                     'Assigned Activity': slot_to_activity[j],
-                    'Outcome': 'Choice 1'
+                    'Outcome': 'Choice 1',
+                    'Flag': students_df.iloc[i]['_flag'],
                 })
 
             if remaining_students and remaining_slots:
@@ -328,26 +346,25 @@ class AssignerApp:
 
                 for new_i, orig_i in enumerate(remaining_students):
                     prefs = students_df.iloc[orig_i]["_prefs"]
+                    is_uncertain = students_df.iloc[orig_i]["_flag"] == "May Not Attend"
                     for rank, act_name in prefs.items():
                         if rank == 1:
                             continue  # Skip if choice 1 fails from capacity
-                        if act_name == WILDCARD_ACTIVITY:
-                            # Wildcard at rank 2+: use normal cost but find its remaining slots
-                            cost = 10 ** (int(rank) - 1)
-                        else:
-                            cost = 10 ** (int(rank) - 1)
+                        base_cost = 10 ** (int(rank) - 1)
+                        cost = base_cost + (MAY_ATTEND_PENALTY if is_uncertain else 0)
                         if act_name in activity_to_slots:
                             for slot_idx in activity_to_slots[act_name]:
                                 if slot_idx in remaining_slots:
                                     new_j = remaining_slots.index(slot_idx)
                                     cost_matrix2[new_i, new_j] = cost
 
-                    # Wildcard rank 1 that didn't get locked forces to 0 on any wildcard slot
+                    # Wildcard rank 1 that didn't get locked forces to low cost on any wildcard slot
                     if prefs.get(1) == WILDCARD_ACTIVITY and WILDCARD_ACTIVITY in activity_to_slots:
+                        wildcard_cost = MAY_ATTEND_PENALTY if is_uncertain else 0
                         for slot_idx in activity_to_slots[WILDCARD_ACTIVITY]:
                             if slot_idx in remaining_slots:
                                 new_j = remaining_slots.index(slot_idx)
-                                cost_matrix2[new_i, new_j] = 0
+                                cost_matrix2[new_i, new_j] = wildcard_cost
 
                     # Waitlist placeholder slots
                     for wl_offset in range(extra_waitlist):
@@ -377,7 +394,8 @@ class AssignerApp:
                     final_results.append({
                         'Name': students_df.iloc[orig_i]['Name'],
                         'Assigned Activity': activity,
-                        'Outcome': label
+                        'Outcome': label,
+                        'Flag': students_df.iloc[orig_i]['_flag'],
                     })
 
             # Save to the user-selected path
@@ -387,8 +405,10 @@ class AssignerApp:
             for item in self.tree.get_children():
                 self.tree.delete(item)
 
-            stats = output_df['Outcome'].value_counts()
-            total = len(output_df)
+            # Summary is based only on assigned students (exclude non-attending)
+            assigned_df = output_df[output_df['Outcome'] != '']
+            stats = assigned_df['Outcome'].value_counts()
+            total = len(assigned_df)
             for label, count in stats.items():
                 percentage = (count / total) * 100
                 self.tree.insert("", "end", values=(label, count, f"{percentage:.1f}%"))
