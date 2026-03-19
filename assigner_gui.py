@@ -78,6 +78,9 @@ def parse_responses(path):
         name_col = next((c for c in cols if "name" in c.lower()), None)
         df["Name"] = df[name_col] if name_col else "Unknown Student"
 
+    grade_col = next((c for c in cols if "grade" in c.lower()), None)
+    df["Grade"] = df[grade_col].astype(str).str.strip() if grade_col else "N/A"
+
     proj_cols = [c for c in df.columns if "Project Requests." in c and "[" in c]
 
     def extract_activity(col):
@@ -101,7 +104,7 @@ def parse_responses(path):
     else:
         df["_will_attend"] = True
 
-    return df[["Name", "_prefs", "_will_attend"]].reset_index(drop=True)
+    return df[["Name", "Grade", "_prefs", "_will_attend", "_may_attend"]].reset_index(drop=True)
 
 
 class AssignerApp:
@@ -307,6 +310,7 @@ class AssignerApp:
             for i, j in locked.items():
                 final_results.append({
                     'Name': students_df.iloc[i]['Name'],
+                    'Grade': students_df.iloc[i]['Grade'],
                     'Assigned Activity': slot_to_activity[j],
                     'Outcome': 'Choice 1'
                 })
@@ -368,14 +372,16 @@ class AssignerApp:
                         label = "Choice 1"
                         activity = slot_to_activity[slot_idx]
                     else:
-                        rank = int(math.log10(cost_val)) + 1
+                        rank = int(math.log10(cost_val) - MAY_ATTEND_PENALTY) + 1
                         label = f"Choice {rank}"
                         activity = slot_to_activity[slot_idx]
 
                     final_results.append({
                         'Name': students_df.iloc[orig_i]['Name'],
                         'Assigned Activity': activity,
-                        'Outcome': label
+                        'Grade': students_df.iloc[orig_i]['Grade'],
+                        'Outcome': label,
+                        'Flag': students_df.iloc[orig_i]['_flag'],
                     })
 
             # Save to the user-selected path
