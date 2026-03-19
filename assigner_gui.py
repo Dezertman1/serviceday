@@ -328,8 +328,8 @@ class AssignerApp:
 
                 cost_matrix2 = np.full((n_rem_s, n_rem_sl), UNRANKED_COST)
 
-                for new_i, orig_i in enumerate(remaining_students):
-                    prefs = students_df.iloc[orig_i]["_prefs"]
+                for matrix_row, student_idx in enumerate(remaining_students):
+                    prefs = students_df.iloc[student_idx]["_prefs"]
                     for rank, act_name in prefs.items():
                         if rank == 1:
                             continue  # Skip if choice 1 fails from capacity
@@ -341,26 +341,26 @@ class AssignerApp:
                         if act_name in activity_to_slots:
                             for slot_idx in activity_to_slots[act_name]:
                                 if slot_idx in remaining_slots:
-                                    new_j = remaining_slots.index(slot_idx)
-                                    cost_matrix2[new_i, new_j] = cost
+                                    matrix_col = remaining_slots.index(slot_idx)
+                                    cost_matrix2[matrix_row, matrix_col] = cost
 
                     # Wildcard rank 1 that didn't get locked forces to 0 on any wildcard slot
                     if prefs.get(1) == WILDCARD_ACTIVITY and WILDCARD_ACTIVITY in activity_to_slots:
                         for slot_idx in activity_to_slots[WILDCARD_ACTIVITY]:
                             if slot_idx in remaining_slots:
-                                new_j = remaining_slots.index(slot_idx)
-                                cost_matrix2[new_i, new_j] = 0
+                                matrix_col = remaining_slots.index(slot_idx)
+                                cost_matrix2[matrix_row, matrix_col] = 0
 
                     # Waitlist placeholder slots
                     for wl_offset in range(extra_waitlist):
-                        cost_matrix2[new_i, n_rem_sl - extra_waitlist + wl_offset] = WAITLIST_COST
+                        cost_matrix2[matrix_row, n_rem_sl - extra_waitlist + wl_offset] = WAITLIST_COST
 
                 row_ind2, col_ind2 = linear_sum_assignment(cost_matrix2)
 
-                for new_i, new_j in zip(row_ind2, col_ind2):
-                    orig_i = remaining_students[new_i]
-                    slot_idx = remaining_slots[new_j]
-                    cost_val = cost_matrix2[new_i, new_j]
+                for matrix_row, matrix_col in zip(row_ind2, col_ind2):
+                    student_idx = remaining_students[matrix_row]
+                    slot_idx = remaining_slots[matrix_col]
+                    cost_val = cost_matrix2[matrix_row, matrix_col]
 
                     if cost_val == WAITLIST_COST or slot_idx == -1:
                         label = "No Choice Possible"
@@ -377,11 +377,11 @@ class AssignerApp:
                         activity = slot_to_activity[slot_idx]
 
                     final_results.append({
-                        'Name': students_df.iloc[orig_i]['Name'],
+                        'Name': students_df.iloc[student_idx]['Name'],
                         'Assigned Activity': activity,
-                        'Grade': students_df.iloc[orig_i]['Grade'],
+                        'Grade': students_df.iloc[student_idx]['Grade'],
                         'Outcome': label,
-                        'Flag': students_df.iloc[orig_i]['_flag'],
+                        'Flag': students_df.iloc[student_idx]['_flag'],
                     })
 
             # Save to the user-selected path
