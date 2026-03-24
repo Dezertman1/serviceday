@@ -79,6 +79,9 @@ def parse_responses(path):
         name_col = next((c for c in cols if "name" in c.lower()), None)
         df["Name"] = df[name_col] if name_col else "Unknown Student"
 
+    grade_col = next((c for c in cols if "grade" in c.lower()), None)
+    df["Grade"] = df[grade_col].astype(str).str.strip() if grade_col else "N/A"
+
     proj_cols = [c for c in df.columns if "Project Requests." in c and "[" in c]
 
     def extract_activity(col):
@@ -104,7 +107,7 @@ def parse_responses(path):
         df["_will_attend"] = True
         df["_may_attend"]  = False
 
-    return df[["Name", "_prefs", "_will_attend", "_may_attend"]].reset_index(drop=True)
+    return df[["Name", "Grade", "_prefs", "_will_attend", "_may_attend"]].reset_index(drop=True)
 
 
 class AssignerApp:
@@ -326,6 +329,7 @@ class AssignerApp:
             for i, j in locked.items():
                 final_results.append({
                     'Name': students_df.iloc[i]['Name'],
+                    'Grade': students_df.iloc[i]['Grade'],
                     'Assigned Activity': slot_to_activity[j],
                     'Outcome': 'Choice 1',
                     'Flag': students_df.iloc[i]['_flag'],
@@ -344,9 +348,8 @@ class AssignerApp:
 
                 cost_matrix2 = np.full((n_rem_s, n_rem_sl), UNRANKED_COST)
 
-                for new_i, orig_i in enumerate(remaining_students):
-                    prefs = students_df.iloc[orig_i]["_prefs"]
-                    is_uncertain = students_df.iloc[orig_i]["_flag"] == "May Not Attend"
+                for matrix_row, student_idx in enumerate(remaining_students):
+                    prefs = students_df.iloc[student_idx]["_prefs"]
                     for rank, act_name in prefs.items():
                         if rank == 1:
                             continue  # Skip if choice 1 fails from capacity
@@ -355,27 +358,27 @@ class AssignerApp:
                         if act_name in activity_to_slots:
                             for slot_idx in activity_to_slots[act_name]:
                                 if slot_idx in remaining_slots:
-                                    new_j = remaining_slots.index(slot_idx)
-                                    cost_matrix2[new_i, new_j] = cost
+                                    matrix_col = remaining_slots.index(slot_idx)
+                                    cost_matrix2[matrix_row, matrix_col] = cost
 
                     # Wildcard rank 1 that didn't get locked forces to low cost on any wildcard slot
                     if prefs.get(1) == WILDCARD_ACTIVITY and WILDCARD_ACTIVITY in activity_to_slots:
                         wildcard_cost = MAY_ATTEND_PENALTY if is_uncertain else 0
                         for slot_idx in activity_to_slots[WILDCARD_ACTIVITY]:
                             if slot_idx in remaining_slots:
-                                new_j = remaining_slots.index(slot_idx)
-                                cost_matrix2[new_i, new_j] = wildcard_cost
+                                matrix_col = remaining_slots.index(slot_idx)
+                                cost_matrix2[matrix_row, matrix_col] = 0
 
                     # Waitlist placeholder slots
                     for wl_offset in range(extra_waitlist):
-                        cost_matrix2[new_i, n_rem_sl - extra_waitlist + wl_offset] = WAITLIST_COST
+                        cost_matrix2[matrix_row, n_rem_sl - extra_waitlist + wl_offset] = WAITLIST_COST
 
                 row_ind2, col_ind2 = linear_sum_assignment(cost_matrix2)
 
-                for new_i, new_j in zip(row_ind2, col_ind2):
-                    orig_i = remaining_students[new_i]
-                    slot_idx = remaining_slots[new_j]
-                    cost_val = cost_matrix2[new_i, new_j]
+                for matrix_row, matrix_col in zip(row_ind2, col_ind2):
+                    student_idx = remaining_students[matrix_row]
+                    slot_idx = remaining_slots[matrix_col]
+                    cost_val = cost_matrix2[matrix_row, matrix_col]
 
                     if cost_val == WAITLIST_COST or slot_idx == -1:
                         label = "No Choice Possible"
@@ -387,15 +390,16 @@ class AssignerApp:
                         label = "Choice 1"
                         activity = slot_to_activity[slot_idx]
                     else:
-                        rank = int(math.log10(cost_val)) + 1
+                        rank = int(math.log10(cost_val) - MAY_ATTEND_PENALTY) + 1
                         label = f"Choice {rank}"
                         activity = slot_to_activity[slot_idx]
 
                     final_results.append({
-                        'Name': students_df.iloc[orig_i]['Name'],
+                        'Name': students_df.iloc[student_idx]['Name'],
                         'Assigned Activity': activity,
+                        'Grade': students_df.iloc[student_idx]['Grade'],
                         'Outcome': label,
-                        'Flag': students_df.iloc[orig_i]['_flag'],
+                        'Flag': students_df.iloc[student_idx]['_flag'],
                     })
 
             # Save to the user-selected path
